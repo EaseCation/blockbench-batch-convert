@@ -34,6 +34,9 @@ Plugin.register('batch-convert', {
             "batch_convert.success": "转换成功",
             "batch_convert.error": "转换失败",
         });
+
+        const separator = process.platform === 'win32' ? '\\' : '/';
+
         /**
          * 遍历dir所有子目录，找出所有的json文件，返回绝对路径
          */
@@ -45,7 +48,7 @@ Plugin.register('batch-convert', {
                     let pending = list.length;
                     if (!pending) return resolve(results);
                     list.forEach((file) => {
-                        file = dir + '/' + file; // 使用字符串拼接代替 path.resolve
+                        file = dir + separator + file; // 使用字符串拼接代替 path.resolve
                         fs.stat(file, async (err, stat) => {
                             if (stat && stat.isDirectory()) {
                                 try {
@@ -241,7 +244,7 @@ Plugin.register('batch-convert', {
             }, (results) => {
                 if (!saveTo) {
                     // 设置为folder的父目录
-                    saveTo = folder.split('/').slice(0, -1).join('/');
+                    saveTo = folder.split(separator).slice(0, -1).join(separator);
                 }
                 // 判断save_to是否为空
                 if (!fs.existsSync(saveTo)) {
@@ -249,7 +252,7 @@ Plugin.register('batch-convert', {
                 }
                 if (fs.readdirSync(saveTo).length > 0) {
                     // 先在save_to目录创建一个与folder文件夹带后缀的新文件夹
-                    saveTo = saveTo + '/' + folder.split('/').pop() + '_converted';
+                    saveTo = saveTo + separator + folder.split(separator).pop() + '_converted';
                     fs.mkdirSync(saveTo, {recursive: true});
                 }
                 processFiles(folder, results, format, saveTo, keepOpen)
