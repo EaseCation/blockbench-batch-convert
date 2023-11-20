@@ -58,6 +58,8 @@ Plugin.register('batch-convert', {
                             } else {
                                 if (file.slice(-5) === '.json') { // 使用字符串切片代替 path.extname
                                     results.push(file);
+                                } else if (file.slice(-8) === '.bbmodel') {
+                                    results.push(file);
                                 }
                                 if (!--pending) resolve(results);
                             }
