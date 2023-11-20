@@ -11,8 +11,9 @@ Plugin.register('batch-convert', {
             "batch_convert.intro": "Select a folder and you can easily batch convert all the models in the folder.",
             "batch_convert.source_folder": "Source folder",
             "batch_convert.target_format": "Target format",
-            "batch_convert.export_to": "Export to≈",
-            "batch_convert.keep_open": "Keep the project open",
+            "batch_convert.export_to": "Export to",
+            "batch_convert.keep_open": "Open projects",
+            "batch_convert.copy_texture": "Copy textures",
             "batch_convert.missing_args.title": "Missing arguments",
             "batch_convert.missing_args.message": "Please select a folder and a target format.",
             "batch_convert.processing": "Processing...",
@@ -21,11 +22,12 @@ Plugin.register('batch-convert', {
         });
         Language.addTranslations("zh", {
             "batch_convert.title": "批量转换",
-            "batch_convert.intro": "选择一个文件夹，方便地批量转换文件夹中的所有模型。",
+            "batch_convert.intro": "选择一个文件夹，方便地批量转换文件夹中的所有模型，并保留原来的目录结构。",
             "batch_convert.source_folder": "源文件夹",
             "batch_convert.target_format": "目标格式",
             "batch_convert.export_to": "导出到(可选)",
-            "batch_convert.keep_open": "保持项目打开",
+            "batch_convert.keep_open": "打开项目",
+            "batch_convert.copy_texture": "复制贴图",
             "batch_convert.missing_args.title": "缺少参数",
             "batch_convert.missing_args.message": "请选择一个文件夹和一个目标格式。",
             "batch_convert.processing": "正在转换...",
@@ -170,37 +172,52 @@ Plugin.register('batch-convert', {
         }
         /**
          * 处理文件并进行转换
+         * @param folder string 原始文件夹路径
          * @param fileResults FileResult[]
          * @param formatType string
-         * @param save_to string
-         * @param keep_open boolean
+         * @param saveTo string
+         * @param keepOpen boolean
          * @returns {Promise<void>}
          */
-        const processFiles = async (fileResults, formatType, save_to, keep_open) => {
-            console.log("processFiles", fileResults, formatType, save_to);
+        const processFiles = async (folder, fileResults, formatType, saveTo, keepOpen) => {
+            console.log("processFiles", fileResults, formatType, saveTo);
+            let index = 0;
             for (let file of fileResults) {
+                // 遍历results，计算每个文件对于folder的相对路径
                 loadModelFile(file);
                 const format = Formats[formatType];
                 format.convertTo();
                 const codec = format.codec;
-                console.log(format);
-                console.log(codec);
-                console.log('fileName', codec.fileName());
+
                 // 拼接出一个保存到的绝对路径，需要包括file.path去除原绝对路径的部分
                 // 处理file.relative_path，去除文件名本身，只保留文件夹路径
-                const relative_path = file.relative_path.replace(file.name, '');
-                const save_path_dir = save_to + relative_path;
+                const relative_path = file.path.replace(folder, '').replace(file.name, '');
+                const save_path_dir = saveTo + relative_path;
                 const save_path = save_path_dir + codec.fileName() + '.' + codec.extension;
-                console.log('save_path', save_path);
 
                 if (!fs.existsSync(save_path_dir)) {
                     fs.mkdirSync(save_path_dir, {recursive: true});
                 }
                 Blockbench.writeFile(save_path, {content: codec.compile()}, path => codec.afterSave(path));
 
-                if (!keep_open && Project) {
+                // 复制贴图
+                for (let texture of Texture.all) {
+                    const path = texture.path;
+                    const name = texture.name;
+                    const relative_path = path.replace(folder, '').replace(name, '');
+                    const save_path_dir = saveTo + relative_path;
+                    const save_path = save_path_dir + name;
+                    fs.mkdirSync(save_path_dir, {recursive: true});
+                    // 从原始目录复制到目标目录
+                    fs.copyFileSync(path, save_path);
+                    texture.fromPath(save_path);
+                }
+
+                if (!keepOpen && Project) {
                     await Project.close(true);
                 }
+                index++;
+                Blockbench.setProgress(Math.min(1, index / fileResults.length));
             }
         }
 
@@ -208,36 +225,42 @@ Plugin.register('batch-convert', {
          * 执行转换
          * @param folder 文件夹路径
          * @param format 目标格式
-         * @param save_to 导出到
-         * @param keep_open 保持项目打开
+         * @param saveTo 导出到
+         * @param keepOpen 保持项目打开
          * @returns {Promise<void>}
          */
-        const doConvert = async (folder, format, save_to, keep_open) => {
-            console.log("doConvert", folder, format, save_to);
+        const doConvert = async (folder, format, saveTo, keepOpen) => {
+            console.log("doConvert", folder, format, saveTo);
             // 遍历folder，获得里面的所有的json文件的绝对路径
             const files = await walk(folder);
             Blockbench.read(files, {
                 readtype: 'text',
                 errorbox: true
             }, (results) => {
-                if (!save_to) {
+                if (!saveTo) {
                     // 设置为folder的父目录
-                    save_to = folder.split('/').slice(0, -1).join('/');
+                    saveTo = folder.split('/').slice(0, -1).join('/');
                 }
                 // 判断save_to是否为空
-                if (!fs.existsSync(save_to)) {
-                    fs.mkdirSync(save_to, {recursive: true});
+                if (!fs.existsSync(saveTo)) {
+                    fs.mkdirSync(saveTo, {recursive: true});
                 }
-                if (fs.readdirSync(save_to).length > 0) {
+                if (fs.readdirSync(saveTo).length > 0) {
                     // 先在save_to目录创建一个与folder文件夹带后缀的新文件夹
-                    save_to = save_to + '/' + folder.split('/').pop() + '_converted';
-                    fs.mkdirSync(save_to, {recursive: true});
+                    saveTo = saveTo + '/' + folder.split('/').pop() + '_converted';
+                    fs.mkdirSync(saveTo, {recursive: true});
                 }
-                // 遍历results，计算每个文件对于folder的相对路径
-                for (let file of results) {
-                    file.relative_path = file.path.replace(folder, '');
-                }
-                processFiles(results, format, save_to, keep_open).then();
+                processFiles(folder, results, format, saveTo, keepOpen)
+                    .then(() => Blockbench.setProgress(-1))
+                    .catch((e) => {
+                        console.error(e);
+                        Blockbench.showMessageBox({
+                            title: "batch_convert.error",
+                            icon: "warning",
+                            message: e.message,
+                        });
+                        Blockbench.setProgress(-1);
+                    });
             })
         }
         const action = new Action("batch-convert", {
@@ -253,6 +276,7 @@ Plugin.register('batch-convert', {
                         options[key] = format.name;
                     }
                 }
+                const localStorageConfig = JSON.parse(localStorage.getItem('batchconvert')) || {};
                 new Dialog("batch-convert-dialog", {
                     title: "batch_convert.title",
                     id: "batch-convert-dialog",
@@ -264,22 +288,28 @@ Plugin.register('batch-convert', {
                         folder: {
                             type: 'folder',
                             label: 'batch_convert.source_folder',
-                            value: localStorage.getItem('batchconvert.lastSourceFolder') || ''
+                            value: localStorageConfig['lastSourceFolder'] || ''
                         },
                         format: {
                             type: 'select',
                             label: 'batch_convert.target_format',
                             options,
-                            value: localStorage.getItem('batchconvert.lastTargetFormat') || "bedrock_block"
+                            value: localStorageConfig['lastTargetFormat'] || "bedrock_block"
                         },
                         save_to: {
                             type: 'folder',
                             label: 'batch_convert.export_to',
-                            value: localStorage.getItem('batchconvert.lastExportTo') || ''
+                            value: localStorageConfig['lastExportTo'] || ''
                         },
                         keep_open: {
                             type: 'checkbox',
                             label: 'batch_convert.keep_open',
+                            value: localStorageConfig['lastKeepOpen'] || false
+                        },
+                        copy_texture: {
+                            type: 'checkbox',
+                            label: 'batch_convert.copy_texture',
+                            value: localStorageConfig['lastCopyTexture'] || false
                         }
                     },
                     onConfirm: async function(formResult) {
@@ -293,9 +323,13 @@ Plugin.register('batch-convert', {
                         }
                         try {
                             // 存储用户选择的目录到localStorage
-                            localStorage.setItem('batchconvert.lastSourceFolder', formResult.folder);
-                            localStorage.setItem('batchconvert.lastTargetFormat', formResult.format);
-                            localStorage.setItem('batchconvert.lastExportTo', formResult.save_to);
+                            localStorage.setItem('batchconvert', JSON.stringify({
+                                lastSourceFolder: formResult.folder,
+                                lastTargetFormat: formResult.format,
+                                lastExportTo: formResult.save_to,
+                                lastKeepOpen: formResult.keep_open,
+                                lastCopyTexture: formResult.copy_texture
+                            }));
                             Blockbench.showQuickMessage("batch_convert.processing");
                             await doConvert(formResult.folder, formResult.format, formResult.save_to, formResult.keep_open);
                             Blockbench.showMessageBox({
