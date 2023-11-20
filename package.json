@@ -1,0 +1,6 @@
+{
+  "name": "batch-convert",
+  "devDependencies": {
+    "blockbench-types": "^4.8.0"
+  }
+}
