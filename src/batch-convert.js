@@ -188,41 +188,45 @@ Plugin.register('batch-convert', {
             console.log("processFiles", fileResults, formatType, saveTo);
             let index = 0;
             for (let file of fileResults) {
-                // 遍历results，计算每个文件对于folder的相对路径
-                loadModelFile(file);
-                const format = Formats[formatType];
-                format.convertTo();
-                const codec = format.codec;
+                try {
+                    // 遍历results，计算每个文件对于folder的相对路径
+                    loadModelFile(file);
+                    const format = Formats[formatType];
+                    format.convertTo();
+                    const codec = format.codec;
 
-                // 拼接出一个保存到的绝对路径，需要包括file.path去除原绝对路径的部分
-                // 处理file.relative_path，去除文件名本身，只保留文件夹路径
-                const relative_path = file.path.replace(folder, '').replace(file.name, '');
-                const save_path_dir = saveTo + relative_path;
-                const save_path = save_path_dir + codec.fileName() + '.' + codec.extension;
-
-                if (!fs.existsSync(save_path_dir)) {
-                    fs.mkdirSync(save_path_dir, {recursive: true});
-                }
-                Blockbench.writeFile(save_path, {content: codec.compile()}, path => codec.afterSave(path));
-
-                // 复制贴图
-                for (let texture of Texture.all) {
-                    const path = texture.path;
-                    const name = texture.name;
-                    const relative_path = path.replace(folder, '').replace(name, '');
+                    // 拼接出一个保存到的绝对路径，需要包括file.path去除原绝对路径的部分
+                    // 处理file.relative_path，去除文件名本身，只保留文件夹路径
+                    const relative_path = file.path.replace(folder, '').replace(file.name, '');
                     const save_path_dir = saveTo + relative_path;
-                    const save_path = save_path_dir + name;
-                    fs.mkdirSync(save_path_dir, {recursive: true});
-                    // 从原始目录复制到目标目录
-                    fs.copyFileSync(path, save_path);
-                    texture.fromPath(save_path);
-                }
+                    const save_path = save_path_dir + codec.fileName() + '.' + codec.extension;
 
-                if (!keepOpen && Project) {
-                    await Project.close(true);
+                    if (!fs.existsSync(save_path_dir)) {
+                        fs.mkdirSync(save_path_dir, {recursive: true});
+                    }
+                    Blockbench.writeFile(save_path, {content: codec.compile()}, path => codec.afterSave(path));
+
+                    // 复制贴图
+                    for (let texture of Texture.all) {
+                        const path = texture.path;
+                        const name = texture.name;
+                        const relative_path = path.replace(folder, '').replace(name, '');
+                        const save_path_dir = saveTo + relative_path;
+                        const save_path = save_path_dir + name;
+                        fs.mkdirSync(save_path_dir, {recursive: true});
+                        // 从原始目录复制到目标目录
+                        fs.copyFileSync(path, save_path);
+                        texture.fromPath(save_path);
+                    }
+
+                    if (!keepOpen && Project) {
+                        await Project.close(true);
+                    }
+                    index++;
+                    Blockbench.setProgress(Math.min(1, index / fileResults.length));
+                } catch (e) {
+                    console.error(e);
                 }
-                index++;
-                Blockbench.setProgress(Math.min(1, index / fileResults.length));
             }
         }
 
