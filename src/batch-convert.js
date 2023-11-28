@@ -8,7 +8,9 @@ Plugin.register('batch-convert', {
     onload() {
         Language.addTranslations("en", {
             "batch_convert.title": "Batch Convert",
+            "batch_convert.title.folder": "Batch Convert from Folder",
             "batch_convert.intro": "Select a folder and you can easily batch convert all the models in the folder.",
+            "batch_convert.intro.folder": "Select a folder, automatically recognize the internal file structure, and convert the model to the appropriate directory. (Always place the output folder in the resourcepacks folder)",
             "batch_convert.source_folder": "Source folder",
             "batch_convert.target_format": "Target format",
             "batch_convert.export_to": "Export to",
@@ -22,7 +24,9 @@ Plugin.register('batch-convert', {
         });
         Language.addTranslations("zh", {
             "batch_convert.title": "批量转换",
+            "batch_convert.title.folder": "自动从目录批量转换",
             "batch_convert.intro": "选择一个文件夹，方便地批量转换文件夹中的所有模型，并保留原来的目录结构。",
+            "batch_convert.intro.folder": "选择一个文件夹，自动识别内部的文件结构，将模型转码到合适的目录。（始终将输出文件夹放在resourcepacks文件夹中）",
             "batch_convert.source_folder": "源文件夹",
             "batch_convert.target_format": "目标格式",
             "batch_convert.export_to": "导出到(可选)",
@@ -71,6 +75,36 @@ Plugin.register('batch-convert', {
                 });
             });
         }
+
+        // 只遍历所有的文件夹，不遍历文件
+        const walkDir = (dir) => {
+            return new Promise((resolve, reject) => {
+                let results = [];
+                fs.readdir(dir, (err, list) => {
+                    if (err) return reject(err);
+                    let pending = list.length;
+                    if (!pending) return resolve(results);
+                    list.forEach((file) => {
+                        file = dir + separator + file; // 使用字符串拼接代替 path.resolve
+                        fs.stat(file, async (err, stat) => {
+                            if (stat && stat.isDirectory()) {
+                                results.push(file);
+                                try {
+                                    let res = await walkDir(file);
+                                    results = results.concat(res);
+                                } catch (e) {
+                                    reject(e);
+                                }
+                                if (!--pending) resolve(results);
+                            } else {
+                                if (!--pending) resolve(results);
+                            }
+                        });
+                    });
+                });
+            });
+        }
+
         /**
          * 加载模型文件
          * Code from Blockbench
@@ -184,7 +218,7 @@ Plugin.register('batch-convert', {
          * @param keepOpen boolean
          * @returns {Promise<void>}
          */
-        const processFiles = async (folder, fileResults, formatType, saveTo, keepOpen) => {
+        const processFiles = async (folder, fileResults, formatType, saveTo, keepOpen, copyTexture) => {
             console.log("processFiles", fileResults, formatType, saveTo);
             let index = 0;
             for (let file of fileResults) {
@@ -207,16 +241,18 @@ Plugin.register('batch-convert', {
                     Blockbench.writeFile(save_path, {content: codec.compile()}, path => codec.afterSave(path));
 
                     // 复制贴图
-                    for (let texture of Texture.all) {
-                        const path = texture.path;
-                        const name = texture.name;
-                        const relative_path = path.replace(folder, '').replace(name, '');
-                        const save_path_dir = saveTo + relative_path;
-                        const save_path = save_path_dir + name;
-                        fs.mkdirSync(save_path_dir, {recursive: true});
-                        // 从原始目录复制到目标目录
-                        fs.copyFileSync(path, save_path);
-                        texture.fromPath(save_path);
+                    if (copyTexture) {
+                        for (let texture of Texture.all) {
+                            const path = texture.path;
+                            const name = texture.name;
+                            const relative_path = path.replace(folder, '').replace(name, '');
+                            const save_path_dir = saveTo + relative_path;
+                            const save_path = save_path_dir + name;
+                            fs.mkdirSync(save_path_dir, {recursive: true});
+                            // 从原始目录复制到目标目录
+                            fs.copyFileSync(path, save_path);
+                            texture.fromPath(save_path);
+                        }
                     }
 
                     if (!keepOpen && Project) {
@@ -238,8 +274,8 @@ Plugin.register('batch-convert', {
          * @param keepOpen 保持项目打开
          * @returns {Promise<void>}
          */
-        const doConvert = async (folder, format, saveTo, keepOpen) => {
-            console.log("doConvert", folder, format, saveTo);
+        const doConvert = async (folder, format, saveTo, keepOpen, copyTexture) => {
+            console.log("doConvert", folder, format, saveTo, copyTexture);
             // 遍历folder，获得里面的所有的json文件的绝对路径
             const files = await walk(folder);
             Blockbench.read(files, {
@@ -259,7 +295,7 @@ Plugin.register('batch-convert', {
                     saveTo = saveTo + separator + folder.split(separator).pop() + '_converted';
                     fs.mkdirSync(saveTo, {recursive: true});
                 }
-                processFiles(folder, results, format, saveTo, keepOpen)
+                processFiles(folder, results, format, saveTo, keepOpen, copyTexture)
                     .then(() => Blockbench.setProgress(-1))
                     .catch((e) => {
                         console.error(e);
@@ -340,7 +376,7 @@ Plugin.register('batch-convert', {
                                 lastCopyTexture: formResult.copy_texture
                             }));
                             Blockbench.showQuickMessage("batch_convert.processing");
-                            await doConvert(formResult.folder, formResult.format, formResult.save_to, formResult.keep_open);
+                            await doConvert(formResult.folder, formResult.format, formResult.save_to, formResult.keep_open, formResult.copy_texture);
                             Blockbench.showMessageBox({
                                 title: "batch_convert.success",
                                 icon: "info",
@@ -377,6 +413,108 @@ Plugin.register('batch-convert', {
                 }).show();
             }
         })
-        MenuBar.menus.tools.addAction(action)
+        const actionFolder = new Action("batch-convert", {
+            name: "batch_convert.title.folder",
+            description: "batch_convert.intro.folder",
+            icon: "icon-format_bedrock",
+            condition: () => true,
+            click: () => {
+                const options = {};
+                for (let key in Formats) {
+                    let format = Formats[key]
+                    if (format.can_convert_to) {
+                        options[key] = format.name;
+                    }
+                }
+                const localStorageConfig = JSON.parse(localStorage.getItem('batchconvert_folder')) || {};
+                new Dialog("batch-convert-dialog", {
+                    title: "batch_convert.title",
+                    id: "batch-convert-dialog",
+                    form: {
+                        text1: {
+                            type: "info",
+                            text: "batch_convert.intro.folder"
+                        },
+                        folder: {
+                            type: 'folder',
+                            label: 'batch_convert.source_folder',
+                            value: localStorageConfig['lastSourceFolder'] || ''
+                        },
+                        format: {
+                            type: 'select',
+                            label: 'batch_convert.target_format',
+                            options,
+                            value: localStorageConfig['lastTargetFormat'] || "bedrock_block"
+                        },
+                        keep_open: {
+                            type: 'checkbox',
+                            label: 'batch_convert.keep_open',
+                            value: localStorageConfig['lastKeepOpen'] || false
+                        },
+                        copy_texture: {
+                            type: 'checkbox',
+                            label: 'batch_convert.copy_texture',
+                            value: localStorageConfig['lastCopyTexture'] || false
+                        }
+                    },
+                    onConfirm: async function(formResult) {
+                        if (!formResult.folder || !formResult.format) {
+                            Blockbench.showMessageBox({
+                                title: "batch_convert.missing_args.title",
+                                icon: "warning",
+                                message: "batch_convert.missing_args.message",
+                            });
+                            return;
+                        }
+                        try {
+                            // 存储用户选择的目录到localStorage
+                            localStorage.setItem('batchconvert_folder', JSON.stringify({
+                                lastSourceFolder: formResult.folder,
+                                lastTargetFormat: formResult.format,
+                                lastKeepOpen: formResult.keep_open,
+                                lastCopyTexture: formResult.copy_texture
+                            }));
+                            Blockbench.showQuickMessage("batch_convert.processing");
+                            // 递归遍历这个文件夹，找到名为resourcepacks这个文件夹
+                            const files = await walkDir(formResult.folder);
+                            for (let file of files) {
+                                if (file.endsWith("resourcepack")) {
+                                    // 遍历里面的文件夹，调用doConvert
+                                    const resFiles = fs.readdirSync(file);
+                                    for (let resFile of resFiles) {
+                                        const fullResFile = file + separator + resFile;
+                                        // 判断是否为文件夹
+                                        if (fs.statSync(fullResFile).isDirectory()) {
+                                            console.log(fullResFile);
+                                            if (fullResFile.endsWith("_converted")) {
+                                                continue;
+                                            }
+                                            // 调用doConvert
+                                            await doConvert(fullResFile, formResult.format, undefined, formResult.keep_open, formResult.copy_texture);
+                                        }
+                                    }
+                                }
+                            }
+                            // 递归遍历resourcepacks文件夹，找到所有的文件夹
+                            /*await doConvert(formResult.folder, formResult.format, formResult.save_to, formResult.keep_open);
+                            Blockbench.showMessageBox({
+                                title: "batch_convert.success",
+                                icon: "info",
+                                message: "batch_convert.success",
+                            });*/
+                        } catch (e) {
+                            console.error(e);
+                            Blockbench.showMessageBox({
+                                title: "batch_convert.error",
+                                icon: "warning",
+                                message: e.message,
+                            });
+                        }
+                    }
+                }).show();
+            }
+        })
+        MenuBar.menus.tools.addAction(action);
+        MenuBar.menus.tools.addAction(actionFolder);
     }
 });
