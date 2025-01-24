@@ -21,6 +21,18 @@ Plugin.register('batch-convert', {
             "batch_convert.processing": "Processing...",
             "batch_convert.success": "Convert success",
             "batch_convert.error": "Convert error",
+            "batch_screenshot.title": "Batch Screenshot",
+            "batch_screenshot.intro": "Select a folder containing model files, and automatically take screenshots of each model.",
+            "batch_screenshot.source_folder": "Source Folder",
+            "batch_screenshot.export_folder": "Screenshot Output Folder",
+            "batch_screenshot.width": "Screenshot Width",
+            "batch_screenshot.height": "Screenshot Height",
+            "batch_screenshot.keep_open": "Keep Project Open",
+            "batch_screenshot.missing_args.title": "Missing Arguments",
+            "batch_screenshot.missing_args.message": "Please select an input folder and an output folder.",
+            "batch_screenshot.processing": "Taking screenshots...",
+            "batch_screenshot.success": "Screenshots finished",
+            "batch_screenshot.error": "Screenshot error",
         });
         Language.addTranslations("zh", {
             "batch_convert.title": "批量转换",
@@ -37,6 +49,18 @@ Plugin.register('batch-convert', {
             "batch_convert.processing": "正在转换...",
             "batch_convert.success": "转换成功",
             "batch_convert.error": "转换失败",
+            "batch_screenshot.title": "批量截图",
+            "batch_screenshot.intro": "选择一个含有模型的文件夹，可批量为每个模型进行截图。",
+            "batch_screenshot.source_folder": "模型文件夹",
+            "batch_screenshot.export_folder": "截图输出文件夹",
+            "batch_screenshot.width": "截图宽度",
+            "batch_screenshot.height": "截图高度",
+            "batch_screenshot.keep_open": "保持项目打开",
+            "batch_screenshot.missing_args.title": "缺少参数",
+            "batch_screenshot.missing_args.message": "请选择输入文件夹以及截图输出文件夹",
+            "batch_screenshot.processing": "正在批量截图...",
+            "batch_screenshot.success": "截图完成",
+            "batch_screenshot.error": "截图出错",
         });
 
         const separator = process.platform === 'win32' ? '\\' : '/';
@@ -513,8 +537,159 @@ Plugin.register('batch-convert', {
                     }
                 }).show();
             }
-        })
+        });
+
+        /**
+         * 批量截图处理函数
+         * @param folder {string} 模型所在文件夹
+         * @param output {string} 截图输出文件夹
+         * @param width {number} 截图宽度
+         * @param height {number} 截图高度
+         * @param keepOpen {boolean} 是否保持项目打开
+         */
+        async function doBatchScreenshot(folder, output, keepOpen) {
+            const filePaths = await walk(folder); // 获取所有 .json/.bbmodel 文件
+            // 逐个读取并截图
+            let index = 0;
+            for (const path of filePaths) {
+                // 筛选出 .json/.bbmodel 文件
+                if (!path.endsWith('.json') && !path.endsWith('.bbmodel')) {
+                    continue;
+                }
+                // 读取文件内容
+                let content = fs.readFileSync(path, 'utf-8');
+                let name = path.split(separator).pop(); // 带扩展名的文件名
+                let baseName = name.replace(/\.\w+$/, ''); // 去掉扩展名
+
+                // 以 Blockbench 文件读取方式转换成 FileResult
+                let fileResult = {
+                    content: content,
+                    name: name,
+                    path: path
+                };
+
+                // 加载到 Blockbench 当前 Project
+                loadModelFile(fileResult);
+
+                // 在此可自定义相机位置/角度，如果有需要的话
+                // 例如：Viewport.zoom = 1.0; Viewport.pitch = 45; Viewport.yaw = 45; ...
+
+                // 需要等待自动加载贴图
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // 执行截图
+                await new Promise((resolve, reject) => {
+                    Blockbench.Screencam.screenshotPreview(
+                        Blockbench.Screencam.NoAAPreview,
+                        { },
+                        (data) => {
+                            try {
+                                // 确保输出文件夹存在
+                                if (!fs.existsSync(output)) {
+                                    fs.mkdirSync(output, { recursive: true });
+                                }
+                                // 文件名可根据需要定制
+                                let screenshotName = baseName + '.png';
+                                let savePath = output + separator + screenshotName;
+                                // 去掉 data:image/png;base64, 前缀，只保留base64内容
+                                const base64Data = data.replace(/^data:image\/png;base64,/, "");
+                                fs.writeFileSync(savePath, base64Data, 'base64');
+                                resolve();
+                            } catch (err) {
+                                reject(err);
+                            }
+                        }
+                    );
+                });
+
+                // 截图完成后，是否关闭项目
+                if (!keepOpen && Project) {
+                    await Project.close(true);
+                }
+                index++;
+                Blockbench.setProgress(Math.min(1, index / filePaths.length));
+            }
+            // 处理完成后进度条归零
+            Blockbench.setProgress(-1);
+        }
+
+        const actionBatchScreenshot = new Action("batch-screenshot", {
+            name: "batch_screenshot.title",
+            description: "batch_screenshot.intro",
+            icon: "icon-format_bedrock",
+            condition: () => true,
+            click: () => {
+                // 读取缓存参数
+                const localStorageConfig = JSON.parse(localStorage.getItem('batch_screenshot')) || {};
+                new Dialog("batch-screenshot-dialog", {
+                    title: "batch_screenshot.title",
+                    id: "batch-screenshot-dialog",
+                    form: {
+                        text1: {
+                            type: "info",
+                            text: "batch_screenshot.intro"
+                        },
+                        folder: {
+                            type: 'folder',
+                            label: 'batch_screenshot.source_folder',
+                            value: localStorageConfig['lastSourceFolder'] || ''
+                        },
+                        output: {
+                            type: 'folder',
+                            label: 'batch_screenshot.export_folder',
+                            value: localStorageConfig['lastOutputFolder'] || ''
+                        },
+                        keep_open: {
+                            type: 'checkbox',
+                            label: 'batch_screenshot.keep_open',
+                            value: localStorageConfig['lastKeepOpen'] || false
+                        }
+                    },
+                    onConfirm: async (formResult) => {
+                        // 校验参数
+                        if (!formResult.folder || !formResult.output) {
+                            Blockbench.showMessageBox({
+                                title: "batch_screenshot.missing_args.title",
+                                icon: "warning",
+                                message: "batch_screenshot.missing_args.message"
+                            });
+                            return;
+                        }
+                        // 缓存配置
+                        localStorage.setItem('batch_screenshot', JSON.stringify({
+                            lastSourceFolder: formResult.folder,
+                            lastOutputFolder: formResult.output,
+                            lastKeepOpen: formResult.keep_open
+                        }));
+
+                        // 执行截图
+                        try {
+                            Blockbench.showQuickMessage("batch_screenshot.processing");
+                            await doBatchScreenshot(
+                                formResult.folder,
+                                formResult.output,
+                                formResult.keep_open
+                            );
+                            Blockbench.showMessageBox({
+                                title: "batch_screenshot.success",
+                                icon: "info",
+                                message: "batch_screenshot.success"
+                            });
+                        } catch (err) {
+                            console.error(err);
+                            Blockbench.showMessageBox({
+                                title: "batch_screenshot.error",
+                                icon: "warning",
+                                message: err.message,
+                            });
+                        }
+                    }
+                }).show();
+            }
+        });
+
         MenuBar.menus.tools.addAction(action);
         MenuBar.menus.tools.addAction(actionFolder);
+        MenuBar.menus.tools.addAction(actionBatchScreenshot);
     }
 });
